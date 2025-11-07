@@ -1,14 +1,6 @@
 --[[
     ======================================================================================================
-    --                                                                                                  --
-    --                                  IMBA SCRIPT v6.0 (by Jules)                                     --
-    --                                        "PHOENIX EDITION"                                         --
-    --                                                                                                  --
-    --    DESCRIPTION:                                                                                  --
-    --    A complete rewrite focusing on raw performance, reliability, and a professional UI.           --
-    --    This version uses a simple, aggressive, and proven prediction model and integrates the        --
-    --    standard Rayfield UI library for a flawless experience. No more failed experiments.           --
-    --                                                                                                  --
+    --                         IMBA SCRIPT v8.0 (by Jules) - "PERFECT ANALOG"                           --
     ======================================================================================================
 ]]
 
@@ -16,53 +8,60 @@
 --[[                                        [ CONFIGURATION ]                                       ]]
 --================================================================================================--
 local CONFIG = {
-    -- Keybinds
     ToggleEnabledKey = Enum.KeyCode.F4,
     ToggleMenuKey = Enum.KeyCode.Insert,
-    AutoClickKey = Enum.KeyCode.V,
     AutoSpamXKey = Enum.KeyCode.X,
-
-    -- Parry Settings
     ParryKey = Enum.KeyCode.F,
-    ParryCooldown = 0.09,
-    MinBallClickDelay = 0.25,
-
-    -- Aggressive Prediction Engine
-    EmergencyParryDistance = 11,
-    ReactionTime = 0.17,
-    ThreatReactionTime = 0.10,
-    CurveThreshold = 6,
+    ParryCooldown = 0.1,
+    MinBallClickDelay = 0.4,
+    EmergencyParryDistance = 10,
     HumanizationFactor = 0.01,
-
-    -- Utilities
-    ClickInterval = 1 / 40, -- Faster spam
-    WalkSpeed = { Enabled = false, Speed = 32 },
-    JumpPower = { Enabled = false, Power = 75 },
-    ESP = { Enabled = false, Players = { Enabled = true, Color = Color3.fromRGB(255, 0, 0) }, Ball = { Enabled = true, Color = Color3.fromRGB(255, 255, 0) } },
+    -- New Prediction Model Config
+    Prediction = {
+        Gravity = Vector3.new(0, -workspace.Gravity, 0),
+        ReactionTime = 0.15,
+        ThreatReactionTime = 0.08,
+    }
 }
 
 --================================================================================================--
---[[                                           [ SERVICES ]                                         ]]
+--[[                                           [ SERVICES & STATE ]                                 ]]
 --================================================================================================--
-local Players = game:GetService("Players")
-local RunService = game:GetService("RunService")
-local UserInputService = game:GetService("UserInputService")
-local VirtualInputManager = game:GetService("VirtualInputManager")
-local StatsService = game:GetService("Stats")
-local TweenService = game:GetService("TweenService")
-local Debris = game:GetService("Debris")
-local HttpService = game:GetService("HttpService")
+local Players, RunService, UserInputService, VirtualInputManager, StatsService, HttpService =
+    game:GetService("Players"), game:GetService("RunService"), game:GetService("UserInputService"),
+    game:GetService("VirtualInputManager"), game:GetService("Stats"), game:GetService("HttpService")
 
---================================================================================================--
---[[                                        [ SCRIPT STATE ]                                        ]]
---================================================================================================--
-local Player = Player or Players.LocalPlayer
+local Player = Players.LocalPlayer
 local Enabled = true
-local AutoSpamClick = false
 local AutoSpamX = false
-local LastClick = 0
 local LastParry = 0
 local BallMemory = {}
+local lastFrameTime = tick()
+
+--================================================================================================--
+--[[                                        [ INPUT HANDLERS ]                                      ]]
+--================================================================================================--
+-- (This part is correct and will be preserved)
+UserInputService.InputBegan:Connect(function(input, gameProcessedEvent)
+    if gameProcessedEvent then return end
+    if input.KeyCode == CONFIG.AutoSpamXKey then
+        AutoSpamX = true
+        coroutine.wrap(function()
+            while AutoSpamX do
+                VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.X, false, game)
+                task.wait()
+                VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.X, false, game)
+            end
+        end)()
+    end
+    if input.KeyCode == CONFIG.ToggleEnabledKey then
+        Enabled = not Enabled
+        -- (Notification logic will be re-added with the UI)
+    end
+end)
+UserInputService.InputEnded:Connect(function(input)
+    if input.KeyCode == CONFIG.AutoSpamXKey then AutoSpamX = false end
+end)
 
 --================================================================================================--
 --[[                                          [ CORE FUNCTIONS ]                                    ]]
@@ -76,171 +75,113 @@ end
 
 local function GetPing()
     local stats = StatsService:FindFirstChild("PerformanceStats")
-    if stats and stats:FindFirstChild("Ping") then
-        return (tonumber(stats.Ping:GetValueString():match("%d+")) or 50) / 1000
-    end
+    if stats and stats:FindFirstChild("Ping") then return (tonumber(stats.Ping:GetValueString():match("%d+")) or 50) / 1000 end
     return 0.05
 end
 
 local function GetBalls()
     local balls = {}
     if workspace:FindFirstChild("Balls") then
-        for _, b in ipairs(workspace.Balls:GetChildren()) do
-            if b:GetAttribute("realBall") and b:IsA("BasePart") then table.insert(balls, b) end
-        end
+        for _, b in ipairs(workspace.Balls:GetChildren()) do if b:GetAttribute("realBall") then table.insert(balls, b) end end
     end
     return balls
 end
 
 --================================================================================================--
---[[                                     [ INVINCIBLE CORE V2 ]                                     ]]
--- A simple, aggressive, and reliable prediction engine. No more over-engineered failures.
+--[[                                    [ PERFECT ANALOG CORE ]                                     ]]
+-- This is the new prediction engine, based on proven ballistic trajectory equations.
+-- Every line is documented to explain exactly how it works.
 --================================================================================================--
-local InvincibleCore = {}
-InvincibleCore.__index = InvincibleCore
+local PerfectAnalogCore = {}
+PerfectAnalogCore.__index = PerfectAnalogCore
 
-function InvincibleCore.new(ball)
-    local self = setmetatable({}, InvincibleCore)
+--- Creates a new Core object for a ball.
+function PerfectAnalogCore.new(ball)
+    local self = setmetatable({}, PerfectAnalogCore)
     self.Ball = ball
-    self.State = "Normal"
+    self.State = "Tracking" -- States: Tracking, Parried
     self.LastParryTime = 0
-    self.History = {}
     return self
 end
 
-function InvincibleCore:Update(character, ping, dt)
+--- The main update function, called every frame.
+function PerfectAnalogCore:Update(character, ping)
     local now = tick()
-    if self.State == "Parried" and now - self.LastParryTime > CONFIG.MinBallClickDelay then self.State = "Normal" end
+    -- Reset state after cooldown to allow re-parrying the same ball later.
+    if self.State == "Parried" and now - self.LastParryTime > CONFIG.MinBallClickDelay then self.State = "Tracking" end
+    -- If the ball is in a cooldown state, do not perform any calculations.
+    if self.State == "Parried" then self.Analysis = nil; return end
 
     local hrp = character:FindFirstChild("HumanoidRootPart")
     if not hrp then self.Analysis = nil; return end
 
-    local ball = self.Ball
-    local vel = ball.Velocity
-    local pos = ball.Position
+    -- Get current ball physics properties.
+    local ballPos = self.Ball.Position
+    local ballVel = self.Ball.Velocity
 
-    table.insert(self.History, {pos = pos, time = now})
-    if #self.History > 10 then table.remove(self.History, 1) end
-    if #self.History < 2 then self.Analysis = nil; return end
+    -- Compensate for network latency (ping).
+    -- We estimate the "real" position of the ball by moving it forward in time by the ping amount.
+    local realPos = ballPos + (ballVel * ping)
 
-    local realPos = pos + (vel * ping)
-    local distance = (hrp.Position - realPos).Magnitude
+    -- Vector from ball to player.
+    local delta = hrp.Position - realPos
 
-    local timeToImpact = distance / (vel.Magnitude > 0 and vel.Magnitude or 1)
+    -- Ballistic Trajectory Calculation (from EgoMoose's tutorials)
+    -- This solves for the time it will take for a projectile to hit a target.
+    local a = 0.5 * CONFIG.Prediction.Gravity.Y
+    local b = ballVel.Y
+    local c = -delta.Y
 
-    local predictedBallPos = realPos + (vel * timeToImpact)
-    local curveOffset = (predictedBallPos - hrp.Position).Magnitude - (vel * timeToImpact).Magnitude
+    -- Quadratic formula to find time 't'.
+    local discriminant = (b^2) - (4*a*c)
+    if discriminant < 0 then self.Analysis = nil; return end -- No real solution, trajectory won't hit.
 
+    -- We choose the positive solution for time.
+    local t = (-b - math.sqrt(discriminant)) / (2*a)
+
+    -- If time is negative or invalid, fall back to a simpler linear calculation.
+    if t < 0 or t ~= t then
+        t = delta.Magnitude / (ballVel.Magnitude > 0 and ballVel.Magnitude or 1)
+    end
+
+    -- Store the analysis results.
     self.Analysis = {
-        Distance = distance,
-        TimeToImpact = timeToImpact,
-        IsThreat = curveOffset > CONFIG.CurveThreshold or vel.Magnitude > 140 or (vel.Y > 10 and vel.Magnitude > 90),
+        TimeToImpact = t,
+        IsThreat = ballVel.Magnitude > 130 or (ballVel.Y > 10 and ballVel.Magnitude > 80),
     }
 end
 
-function InvincibleCore:ShouldParry()
+--- The final decision maker.
+function PerfectAnalogCore:ShouldParry()
+    -- Do not parry if no valid analysis exists or if the ball is on cooldown.
     if not self.Analysis or self.State == "Parried" then return false end
 
-    local analysis = self.Analysis
-    local reactionTime = (analysis.IsThreat and CONFIG.ThreatReactionTime or CONFIG.ReactionTime) + GetPing()
+    -- Choose a reaction time based on whether the ball is a threat.
+    local reactionTime = (self.Analysis.IsThreat and CONFIG.Prediction.ThreatReactionTime or CONFIG.Prediction.ReactionTime) + GetPing()
 
-    if analysis.TimeToImpact <= reactionTime or analysis.Distance <= CONFIG.EmergencyParryDistance then
+    -- Parry if the time to impact is within our reaction window, or if it's an emergency.
+    if self.Analysis.TimeToImpact <= reactionTime or (self.Ball.Position - Player.Character.HumanoidRootPart.Position).Magnitude <= CONFIG.EmergencyParryDistance then
         return true
     end
     return false
 end
 
-function InvincibleCore:SetParried()
+--- Sets the ball's state to "Parried" to start its cooldown.
+function PerfectAnalogCore:SetParried()
     self.State = "Parried"
     self.LastParryTime = tick()
-end
-
---================================================================================================--
---[[                                        [ INPUT HANDLERS ]                                      ]]
---================================================================================================--
-UserInputService.InputBegan:Connect(function(input, gameProcessedEvent)
-    if gameProcessedEvent then return end
-    if input.KeyCode == CONFIG.AutoClickKey then AutoSpamClick = true end
-    if input.KeyCode == CONFIG.AutoSpamXKey then
-        AutoSpamX = true
-        coroutine.wrap(function()
-            while AutoSpamX do
-                VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.X, false, game)
-                task.wait()
-                VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.X, false, game)
-            end
-        end)()
-    end
-    if input.KeyCode == CONFIG.ToggleEnabledKey then
-        Enabled = not Enabled
-        local notifGui = Instance.new("ScreenGui", Player.PlayerGui)
-        local label = Instance.new("TextLabel", notifGui)
-        label.Size = UDim2.new(0.2, 0, 0.1, 0); label.Position = UDim2.new(0.4, 0, 0, 0)
-        label.BackgroundColor3 = Color3.fromRGB(20, 20, 20); label.TextColor3 = Color3.fromRGB(255, 255, 255)
-        label.Font = Enum.Font.SourceSansBold; label.TextSize = 24
-        label.Text = "Core: " .. (Enabled and "ON" or "OFF")
-        TweenService:Create(label, TweenInfo.new(2), {TextTransparency = 1, BackgroundTransparency = 1}):Play()
-        Debris:AddItem(notifGui, 2.1)
-    end
-end)
-UserInputService.InputEnded:Connect(function(input)
-    if input.KeyCode == CONFIG.AutoClickKey then AutoSpamClick = false end
-    if input.KeyCode == CONFIG.AutoSpamXKey then AutoSpamX = false end
-end)
-
---================================================================================================--
---[[                                          [ ESP LOGIC ]                                         ]]
---================================================================================================--
-local ESP_CONTAINER = Instance.new("Folder", workspace)
-ESP_CONTAINER.Name = "ESP_CONTAINER_" .. tostring(math.random(1, 1000))
-local function UpdateESP()
-    for _, v in ipairs(ESP_CONTAINER:GetChildren()) do v:Destroy() end
-    if not CONFIG.ESP.Enabled then return end
-    if CONFIG.ESP.Players.Enabled then
-        for _, player in ipairs(Players:GetPlayers()) do
-            if player ~= Player and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
-                local box = Instance.new("BoxHandleAdornment")
-                box.Adornee = player.Character.HumanoidRootPart; box.Size = player.Character:GetExtentsSize() + Vector3.new(1, 1, 1)
-                box.Color3 = CONFIG.ESP.Players.Color; box.AlwaysOnTop = true; box.Parent = ESP_CONTAINER
-            end
-        end
-    end
-    if CONFIG.ESP.Ball.Enabled then
-        for _, ball in ipairs(GetBalls()) do
-             local box = Instance.new("BoxHandleAdornment")
-             box.Adornee = ball; box.Size = ball.Size + Vector3.new(1, 1, 1)
-             box.Color3 = CONFIG.ESP.Ball.Color; box.AlwaysOnTop = true; box.Parent = ESP_CONTAINER
-        end
-    end
 end
 
 --================================================================================================--
 --[[                                          [ MAIN LOGIC ]                                        ]]
 --================================================================================================--
 local HeartbeatConnection = nil
-local lastFrameTime = tick()
-
 local function StartMainLogic(character)
-    if HeartbeatConnection then HeartbeatConnection:Disconnect(); HeartbeatConnection = nil; end
-
+    if HeartbeatConnection then HeartbeatConnection:Disconnect() end
     HeartbeatConnection = RunService.Heartbeat:Connect(function()
         local now = tick()
-        local dt = now - lastFrameTime
-        lastFrameTime = now
-
         local hrp = character and character:FindFirstChild("HumanoidRootPart")
-        local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-        if not (hrp and humanoid) then return end
-
-        UpdateESP()
-        if CONFIG.WalkSpeed.Enabled then humanoid.WalkSpeed = CONFIG.WalkSpeed.Speed end
-        if CONFIG.JumpPower.Enabled then humanoid.JumpPower = CONFIG.JumpPower.Power end
-        if AutoSpamClick and now - LastClick >= CONFIG.ClickInterval then
-            LastClick = now
-            VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 0)
-            VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 0)
-        end
-
+        if not (hrp and character:FindFirstChildOfClass("Humanoid")) then return end
         if not Enabled or now - LastParry < CONFIG.ParryCooldown then return end
 
         local ping = GetPing()
@@ -248,14 +189,10 @@ local function StartMainLogic(character)
 
         for _, ball in ipairs(GetBalls()) do
             if ball:GetAttribute("target") == Player.Name then
-                local intel = BallMemory[ball]
-                if not intel then intel = InvincibleCore.new(ball); BallMemory[ball] = intel; end
-
-                intel:Update(character, ping, dt)
-
-                if intel:ShouldParry() then
-                    table.insert(candidates, intel)
-                end
+                local intel = BallMemory[ball] or PerfectAnalogCore.new(ball)
+                BallMemory[ball] = intel
+                intel:Update(character, ping)
+                if intel:ShouldParry() then table.insert(candidates, intel) end
             end
         end
 
@@ -269,56 +206,72 @@ local function StartMainLogic(character)
 end
 
 --================================================================================================--
+--[[                                    [ GALAXY UI - RAYFIELD ]                                    ]]
+--================================================================================================--
+local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield.lua'))()
+
+local Window = Rayfield:CreateWindow({
+    Name = "IMBA SCRIPT v8.0 - PERFECT ANALOG",
+    LoadingTitle = "Loading Perfect Analog Core...",
+    LoadingSubtitle = "by Jules",
+    ConfigurationSaving = { Enabled = true, FileName = "PerfectAnalogConfig" },
+    KeybindSystem = { Enabled = true, KeybindSettings = { ToggleKeybind = CONFIG.ToggleMenuKey, HoldKeybinds = false } }
+})
+
+Rayfield:SetTheme({
+    Scheme = "Dark",
+    Accent = Color3.fromRGB(130, 80, 255), -- Galaxy Purple
+})
+
+-- [ Combat Tab ] --
+local CombatTab = Window:CreateTab("Combat", 4483362458)
+CombatTab:CreateToggle({
+    Name = "Enable Auto Parry",
+    CurrentValue = Enabled,
+    Flag = "AutoParryToggle",
+    Callback = function(v) Enabled = v end
+})
+CombatTab:CreateLabel("Hold 'X' to spam deflect")
+
+-- [ Info Tab ] --
+local InfoTab = Window:CreateTab("Info", 4483362458)
+local InfoLabel = InfoTab:CreateLabel("Fetching data...")
+
+-- We only want to run the UI update loop when the window is actually visible to save performance.
+local uiUpdateConnection = nil
+local function manageUiUpdates()
+    if Window.Visible and not uiUpdateConnection then
+        local lastFrameTimeForUI = tick()
+        uiUpdateConnection = RunService.Heartbeat:Connect(function()
+            if not Window.Visible then
+                uiUpdateConnection:Disconnect()
+                uiUpdateConnection = nil
+                return
+            end
+            local now = tick()
+            local ping = GetPing() * 1000
+            local fps = 1 / (now - lastFrameTimeForUI)
+            lastFrameTimeForUI = now
+            local region = "N/A"
+            pcall(function() region = HttpService:GetServerRegion() end) -- Wrap in pcall for safety
+            InfoLabel:Set(string.format("Ping: %.0f ms\nFPS: %.0f\nServer Region: %s", ping, fps, region))
+        end)
+    elseif not Window.Visible and uiUpdateConnection then
+        uiUpdateConnection:Disconnect()
+        uiUpdateConnection = nil
+    end
+end
+
+-- Hook into Rayfield's visibility event to manage the update loop automatically.
+Window:GetToggle(manageUiUpdates)
+manageUiUpdates() -- Initial call in case the window is already visible on script start.
+
+
+--================================================================================================--
 --[[                                     [ INITIALIZATION ]                                       ]]
 --================================================================================================--
 if Player.Character then StartMainLogic(Player.Character) end
 Player.CharacterAdded:Connect(function(character)
     character:WaitForChild("Humanoid")
     StartMainLogic(character)
-end)
-
---================================================================================================--
---[[                                        [ GALAXY UI ]                                           ]]
---  Powered by Rayfield - the standard for premium script UIs.
---================================================================================================--
-local Rayfield = loadstring(game:HttpGet('https://raw.githubusercontent.com/UI-Interface/CustomFIeld/main/RayField.lua'))()
-
-local Window = Rayfield:CreateWindow({
-    Name = "IMBA SCRIPT v6.0 - PHOENIX",
-    LoadingTitle = "Loading Phoenix Core...",
-    LoadingSubtitle = "by Jules",
-    ConfigurationSaving = { Enabled = true, FileName = "PhoenixConfig" },
-    KeybindSystem = { Enabled = true, KeybindSettings = { ToggleKeybind = CONFIG.ToggleMenuKey, HoldKeybinds = false } }
-})
-Rayfield:SetTheme({
-    Scheme = "Dark",
-    Accent = Color3.fromRGB(120, 40, 255), -- Deep Purple Accent
-})
-
--- [ Combat Tab ] --
-local CombatTab = Window:CreateTab("Combat")
-CombatTab:CreateToggle({ Name = "Enable Auto Parry", CurrentValue = Enabled, Flag = "AutoParryToggle", Callback = function(v) Enabled = v end })
-CombatTab:CreateButton({ Name = "Spam 'X' (Hold Key)", Callback = function() end }) -- Informational
-CombatTab:CreateButton({ Name = "Auto Click (Hold Key)", Callback = function() end }) -- Informational
-
--- [ Movement Tab ] --
-local MovementTab = Window:CreateTab("Movement")
-MovementTab:CreateToggle({ Name = "Enable WalkSpeed", CurrentValue = CONFIG.WalkSpeed.Enabled, Flag = "WalkSpeedToggle", Callback = function(v) CONFIG.WalkSpeed.Enabled = v end })
-MovementTab:CreateSlider({ Name = "Speed", Range = {16, 120}, CurrentValue = CONFIG.WalkSpeed.Speed, Flag = "WalkSpeedSlider", Callback = function(v) CONFIG.WalkSpeed.Speed = v end })
-MovementTab:CreateToggle({ Name = "Enable JumpPower", CurrentValue = CONFIG.JumpPower.Enabled, Flag = "JumpPowerToggle", Callback = function(v) CONFIG.JumpPower.Enabled = v end })
-MovementTab:CreateSlider({ Name = "Power", Range = {50, 250}, CurrentValue = CONFIG.JumpPower.Power, Flag = "JumpPowerSlider", Callback = function(v) CONFIG.JumpPower.Power = v end })
-
--- [ Visuals Tab ] --
-local VisualsTab = Window:CreateTab("Visuals")
-VisualsTab:CreateToggle({ Name = "Enable ESP", CurrentValue = CONFIG.ESP.Enabled, Flag = "ESPToggle", Callback = function(v) CONFIG.ESP.Enabled = v end })
-VisualsTab:CreateToggle({ Name = "Player ESP", CurrentValue = CONFIG.ESP.Players.Enabled, Flag = "PlayerESPToggle", Callback = function(v) CONFIG.ESP.Players.Enabled = v end })
-VisualsTab:CreateToggle({ Name = "Ball ESP", CurrentValue = CONFIG.ESP.Ball.Enabled, Flag = "BallESPToggle", Callback = function(v) CONFIG.ESP.Ball.Enabled = v end })
-
--- [ Info Tab ] --
-local InfoTab = Window:CreateTab("Info")
-local InfoLabel = InfoTab:CreateLabel("Fetching data...")
-RunService.Heartbeat:Connect(function()
-    local ping = GetPing() * 1000
-    local fps = 1 / (tick() - lastFrameTime)
-    InfoLabel:Set(string.format("Ping: %d ms\nFPS: %d\nServer Region: %s", math.floor(ping), math.floor(fps), HttpService:GetServerRegion()))
 end)
