@@ -1,12 +1,13 @@
 --[[
     ======================================================================================================
     --                                                                                                  --
-    --                                  IMBA SCRIPT v5.0 (by Jules)                                     --
-    --                                        "CYBORG EDITION"                                          --
+    --                                  IMBA SCRIPT v6.0 (by Jules)                                     --
+    --                                        "PHOENIX EDITION"                                         --
     --                                                                                                  --
     --    DESCRIPTION:                                                                                  --
-    --    The ultimate auto-parry script, rebuilt with a Kalman Filter prediction engine to achieve     --
-    --    unparalleled accuracy even with high ping. This script doesn't just react; it predicts.      --
+    --    A complete rewrite focusing on raw performance, reliability, and a professional UI.           --
+    --    This version uses a simple, aggressive, and proven prediction model and integrates the        --
+    --    standard Rayfield UI library for a flawless experience. No more failed experiments.           --
     --                                                                                                  --
     ======================================================================================================
 ]]
@@ -23,30 +24,18 @@ local CONFIG = {
 
     -- Parry Settings
     ParryKey = Enum.KeyCode.F,
-    ParryCooldown = 0.1, -- Slightly increased for stability
-    MinBallClickDelay = 0.3, -- Increased to prevent any chance of double-clicks
+    ParryCooldown = 0.09,
+    MinBallClickDelay = 0.25,
 
-    -- "Cyborg" Prediction Engine Tuning
-    EmergencyParryDistance = 10, -- Tactical distance for close-quarters combat
-    CloseQuartersDistance = 12,  -- Distance to activate "reflex" mode
+    -- Aggressive Prediction Engine
+    EmergencyParryDistance = 11,
+    ReactionTime = 0.17,
+    ThreatReactionTime = 0.10,
+    CurveThreshold = 6,
+    HumanizationFactor = 0.01,
 
-    ReactionTime = 0.15,         -- Base reaction time in a predictable situation
-    ThreatReactionTime = 0.09,   -- Reaction time when a threat (curve/speed) is detected
-
-    -- Kalman Filter Parameters (ADVANCED)
-    Kalman = {
-        Q = 0.0001, -- Process noise (how much we trust the physics model)
-        R = 0.02,   -- Measurement noise (how much we trust the raw game data)
-    },
-
-    -- Threat Detection
-    CurveThreshold = 6, -- How much a ball must curve to be a "threat"
-
-    -- Humanization
-    HumanizationFactor = 0.015,
-
-    -- Utilities (unchanged)
-    ClickInterval = 1 / 35,
+    -- Utilities
+    ClickInterval = 1 / 40, -- Faster spam
     WalkSpeed = { Enabled = false, Speed = 32 },
     JumpPower = { Enabled = false, Power = 75 },
     ESP = { Enabled = false, Players = { Enabled = true, Color = Color3.fromRGB(255, 0, 0) }, Ball = { Enabled = true, Color = Color3.fromRGB(255, 255, 0) } },
@@ -62,6 +51,7 @@ local VirtualInputManager = game:GetService("VirtualInputManager")
 local StatsService = game:GetService("Stats")
 local TweenService = game:GetService("TweenService")
 local Debris = game:GetService("Debris")
+local HttpService = game:GetService("HttpService")
 
 --================================================================================================--
 --[[                                        [ SCRIPT STATE ]                                        ]]
@@ -103,43 +93,22 @@ local function GetBalls()
 end
 
 --================================================================================================--
---[[                                     [ CYBORGCORE MODULE ]                                      ]]
--- This is the new prediction engine, built around a Kalman Filter.
+--[[                                     [ INVINCIBLE CORE V2 ]                                     ]]
+-- A simple, aggressive, and reliable prediction engine. No more over-engineered failures.
 --================================================================================================--
-local CyborgCore = {}
-CyborgCore.__index = CyborgCore
+local InvincibleCore = {}
+InvincibleCore.__index = InvincibleCore
 
-function CyborgCore.new(ball)
-    local self = setmetatable({}, CyborgCore)
+function InvincibleCore.new(ball)
+    local self = setmetatable({}, InvincibleCore)
     self.Ball = ball
     self.State = "Normal"
     self.LastParryTime = 0
-    -- Kalman Filter State
-    self.x = ball.Position -- Initial state estimate (position)
-    self.P = 1             -- Initial error covariance
-    self.last_vel = Vector3.new(0,0,0)
+    self.History = {}
     return self
 end
 
-function CyborgCore:KalmanUpdate(measurement, dt)
-    local vel = (measurement - self.x) / dt
-    local A = Vector3.new(1,1,1) -- State transition matrix (simplified)
-    local B = Vector3.new(dt, dt, dt) -- Control matrix
-    local u = (vel - self.last_vel) / dt -- Control vector (acceleration)
-    self.last_vel = vel
-
-    -- Prediction Step
-    local x_hat = A * self.x + B * u
-    local P_hat = A * self.P * A + CONFIG.Kalman.Q
-
-    -- Correction Step
-    local K = P_hat / (P_hat + CONFIG.Kalman.R)
-    self.x = x_hat + K * (measurement - x_hat)
-    self.P = (Vector3.new(1,1,1) - K) * P_hat
-    return self.x -- Return the filtered (true) position
-end
-
-function CyborgCore:Update(character, ping, dt)
+function InvincibleCore:Update(character, ping, dt)
     local now = tick()
     if self.State == "Parried" and now - self.LastParryTime > CONFIG.MinBallClickDelay then self.State = "Normal" end
 
@@ -147,37 +116,33 @@ function CyborgCore:Update(character, ping, dt)
     if not hrp then self.Analysis = nil; return end
 
     local ball = self.Ball
-    local measured_pos = ball.Position
     local vel = ball.Velocity
+    local pos = ball.Position
 
-    -- Get the "true" position from the Kalman Filter. This is the magic.
-    local true_pos = self:KalmanUpdate(measured_pos, dt)
+    table.insert(self.History, {pos = pos, time = now})
+    if #self.History > 10 then table.remove(self.History, 1) end
+    if #self.History < 2 then self.Analysis = nil; return end
 
-    -- All calculations are now based on the filtered position.
-    local distance = (hrp.Position - true_pos).Magnitude
+    local realPos = pos + (vel * ping)
+    local distance = (hrp.Position - realPos).Magnitude
 
     local timeToImpact = distance / (vel.Magnitude > 0 and vel.Magnitude or 1)
-    local predictedBallPos = true_pos + (vel * timeToImpact)
+
+    local predictedBallPos = realPos + (vel * timeToImpact)
     local curveOffset = (predictedBallPos - hrp.Position).Magnitude - (vel * timeToImpact).Magnitude
 
     self.Analysis = {
         Distance = distance,
-        Speed = vel.Magnitude,
         TimeToImpact = timeToImpact,
-        IsThreat = curveOffset > CONFIG.CurveThreshold or vel.Magnitude > 150,
+        IsThreat = curveOffset > CONFIG.CurveThreshold or vel.Magnitude > 140 or (vel.Y > 10 and vel.Magnitude > 90),
     }
 end
 
-function CyborgCore:ShouldParry()
+function InvincibleCore:ShouldParry()
     if not self.Analysis or self.State == "Parried" then return false end
 
     local analysis = self.Analysis
-    local reactionTime = analysis.IsThreat and CONFIG.ThreatReactionTime or CONFIG.ReactionTime
-
-    -- Tactical Reflex Mode for close quarters
-    if analysis.Distance < CONFIG.CloseQuartersDistance then
-        reactionTime = reactionTime / 2
-    end
+    local reactionTime = (analysis.IsThreat and CONFIG.ThreatReactionTime or CONFIG.ReactionTime) + GetPing()
 
     if analysis.TimeToImpact <= reactionTime or analysis.Distance <= CONFIG.EmergencyParryDistance then
         return true
@@ -185,18 +150,14 @@ function CyborgCore:ShouldParry()
     return false
 end
 
-function CyborgCore:SetParried()
+function InvincibleCore:SetParried()
     self.State = "Parried"
     self.LastParryTime = tick()
 end
 
--- ... (rest of the script: INPUT HANDLERS, ESP, MAIN LOGIC, UI)
--- The UI part will be replaced in the next step.
-
 --================================================================================================--
 --[[                                        [ INPUT HANDLERS ]                                      ]]
 --================================================================================================--
--- (This part remains largely the same, but is here for completeness)
 UserInputService.InputBegan:Connect(function(input, gameProcessedEvent)
     if gameProcessedEvent then return end
     if input.KeyCode == CONFIG.AutoClickKey then AutoSpamClick = true end
@@ -217,7 +178,7 @@ UserInputService.InputBegan:Connect(function(input, gameProcessedEvent)
         label.Size = UDim2.new(0.2, 0, 0.1, 0); label.Position = UDim2.new(0.4, 0, 0, 0)
         label.BackgroundColor3 = Color3.fromRGB(20, 20, 20); label.TextColor3 = Color3.fromRGB(255, 255, 255)
         label.Font = Enum.Font.SourceSansBold; label.TextSize = 24
-        label.Text = "Cyborg Core: " .. (Enabled and "ON" or "OFF")
+        label.Text = "Core: " .. (Enabled and "ON" or "OFF")
         TweenService:Create(label, TweenInfo.new(2), {TextTransparency = 1, BackgroundTransparency = 1}):Play()
         Debris:AddItem(notifGui, 2.1)
     end
@@ -288,9 +249,9 @@ local function StartMainLogic(character)
         for _, ball in ipairs(GetBalls()) do
             if ball:GetAttribute("target") == Player.Name then
                 local intel = BallMemory[ball]
-                if not intel then intel = CyborgCore.new(ball); BallMemory[ball] = intel; end
+                if not intel then intel = InvincibleCore.new(ball); BallMemory[ball] = intel; end
 
-                intel:Update(character, ping, 1/dt)
+                intel:Update(character, ping, dt)
 
                 if intel:ShouldParry() then
                     table.insert(candidates, intel)
@@ -316,87 +277,48 @@ Player.CharacterAdded:Connect(function(character)
     StartMainLogic(character)
 end)
 
--- The custom UI will be added here in the next step.
--- For now, deleting the old one.
---[[                                      [ DARK MATTER UI ]                                        ]]
--- A sleek, animated, dark-purple themed UI built from scratch.
 --================================================================================================--
-local GUI = {}
-function GUI:Create()
-    -- [ Main Container ] --
-    local ScreenGui = Instance.new("ScreenGui"); ScreenGui.Name = "DarkMatterGUI"; ScreenGui.Parent = Player:WaitForChild("PlayerGui"); ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-    local MainFrame = Instance.new("Frame"); MainFrame.Name = "MainFrame"; MainFrame.Parent = ScreenGui; MainFrame.AnchorPoint = Vector2.new(0.5, 0.5); MainFrame.Position = UDim2.new(0.5, 0, 0.5, 0); MainFrame.Size = UDim2.new(0, 450, 0, 350); MainFrame.BackgroundColor3 = Color3.fromRGB(20, 18, 25); MainFrame.BorderColor3 = Color3.fromRGB(80, 50, 120); MainFrame.BorderSizePixel = 2; MainFrame.Visible = true; MainFrame.Draggable = true;
-    local UICorner = Instance.new("UICorner"); UICorner.CornerRadius = UDim.new(0, 8); UICorner.Parent = MainFrame
+--[[                                        [ GALAXY UI ]                                           ]]
+--  Powered by Rayfield - the standard for premium script UIs.
+--================================================================================================--
+local Rayfield = loadstring(game:HttpGet('https://raw.githubusercontent.com/UI-Interface/CustomFIeld/main/RayField.lua'))()
 
-    -- [ Title Bar ] --
-    local Title = Instance.new("TextLabel"); Title.Name = "Title"; Title.Parent = MainFrame; Title.Size = UDim2.new(1, 0, 0, 35); Title.BackgroundColor3 = Color3.fromRGB(30, 25, 40); Title.Font = Enum.Font.SourceSansBold; Title.Text = "CYBORG CORE"; Title.TextColor3 = Color3.fromRGB(180, 160, 220); Title.TextSize = 20
-    local TitleCorner = Instance.new("UICorner"); TitleCorner.CornerRadius = UDim.new(0, 8); TitleCorner.Parent = Title
+local Window = Rayfield:CreateWindow({
+    Name = "IMBA SCRIPT v6.0 - PHOENIX",
+    LoadingTitle = "Loading Phoenix Core...",
+    LoadingSubtitle = "by Jules",
+    ConfigurationSaving = { Enabled = true, FileName = "PhoenixConfig" },
+    KeybindSystem = { Enabled = true, KeybindSettings = { ToggleKeybind = CONFIG.ToggleMenuKey, HoldKeybinds = false } }
+})
+Rayfield:SetTheme({
+    Scheme = "Dark",
+    Accent = Color3.fromRGB(120, 40, 255), -- Deep Purple Accent
+})
 
-    -- [ Info Panel ] --
-    local InfoButton = Instance.new("TextButton"); InfoButton.Name = "InfoButton"; InfoButton.Parent = Title; InfoButton.Size = UDim2.new(0, 80, 0.8, 0); InfoButton.AnchorPoint = Vector2.new(1, 0.5); InfoButton.Position = UDim2.new(1, -10, 0.5, 0); InfoButton.BackgroundColor3 = Color3.fromRGB(50, 45, 60); InfoButton.Text = "INFO"; InfoButton.TextColor3 = Color3.fromRGB(200, 180, 240); InfoButton.Font = Enum.Font.SourceSansBold
-    local InfoCorner = Instance.new("UICorner"); InfoCorner.CornerRadius = UDim.new(0, 4); InfoCorner.Parent = InfoButton
-    local InfoPanel = Instance.new("Frame"); InfoPanel.Name = "InfoPanel"; InfoPanel.Parent = MainFrame; InfoPanel.Size = UDim2.new(1, -20, 0, 100); InfoPanel.Position = UDim2.new(0.5, 0, 0.5, 0); InfoPanel.AnchorPoint = Vector2.new(0.5, 0.5); InfoPanel.BackgroundColor3 = Color3.fromRGB(15, 12, 20); InfoPanel.BorderColor3 = Color3.fromRGB(80, 50, 120); InfoPanel.BorderSizePixel = 1; InfoPanel.Visible = false;
-    local InfoText = Instance.new("TextLabel"); InfoText.Name = "InfoText"; InfoText.Parent = InfoPanel; InfoText.Size = UDim2.new(1, -20, 1, -20); InfoText.Position = UDim2.new(0.5, 0, 0.5, 0); InfoText.AnchorPoint = Vector2.new(0.5, 0.5); InfoText.BackgroundColor3 = Color3.fromRGB(15, 12, 20); InfoText.TextColor3 = Color3.fromRGB(200, 180, 240); InfoText.Font = Enum.Font.SourceSans; InfoText.TextXAlignment = Enum.TextXAlignment.Left; InfoText.TextYAlignment = Enum.TextYAlignment.Top
-    InfoButton.MouseButton1Click:Connect(function()
-        InfoPanel.Visible = not InfoPanel.Visible
-        local ping = GetPing() * 1000
-        local fps = 1 / (tick() - lastFrameTime)
-        InfoText.Text = string.format("Ping: %d ms\nFPS: %d\nServer Region: %s", math.floor(ping), math.floor(fps), game:GetService("HttpService"):GetServerRegion())
-    end)
+-- [ Combat Tab ] --
+local CombatTab = Window:CreateTab("Combat")
+CombatTab:CreateToggle({ Name = "Enable Auto Parry", CurrentValue = Enabled, Flag = "AutoParryToggle", Callback = function(v) Enabled = v end })
+CombatTab:CreateButton({ Name = "Spam 'X' (Hold Key)", Callback = function() end }) -- Informational
+CombatTab:CreateButton({ Name = "Auto Click (Hold Key)", Callback = function() end }) -- Informational
 
-    -- [ Tabs ] --
-    -- [ Tabs & Content ] --
-    local TabsContainer = Instance.new("Frame"); TabsContainer.Name = "TabsContainer"; TabsContainer.Parent = MainFrame; TabsContainer.BackgroundColor3 = Color3.fromRGB(25, 22, 32); TabsContainer.Size = UDim2.new(1, 0, 0, 30); TabsContainer.Position = UDim2.new(0, 0, 0, 35)
-    local ContentContainer = Instance.new("Frame"); ContentContainer.Name = "ContentContainer"; ContentContainer.Parent = MainFrame; ContentContainer.BackgroundColor3 = Color3.fromRGB(20, 18, 25); ContentContainer.Size = UDim2.new(1, -20, 1, -85); ContentContainer.Position = UDim2.new(0.5, 0, 0, 75); ContentContainer.AnchorPoint = Vector2.new(0.5, 0)
+-- [ Movement Tab ] --
+local MovementTab = Window:CreateTab("Movement")
+MovementTab:CreateToggle({ Name = "Enable WalkSpeed", CurrentValue = CONFIG.WalkSpeed.Enabled, Flag = "WalkSpeedToggle", Callback = function(v) CONFIG.WalkSpeed.Enabled = v end })
+MovementTab:CreateSlider({ Name = "Speed", Range = {16, 120}, CurrentValue = CONFIG.WalkSpeed.Speed, Flag = "WalkSpeedSlider", Callback = function(v) CONFIG.WalkSpeed.Speed = v end })
+MovementTab:CreateToggle({ Name = "Enable JumpPower", CurrentValue = CONFIG.JumpPower.Enabled, Flag = "JumpPowerToggle", Callback = function(v) CONFIG.JumpPower.Enabled = v end })
+MovementTab:CreateSlider({ Name = "Power", Range = {50, 250}, CurrentValue = CONFIG.JumpPower.Power, Flag = "JumpPowerSlider", Callback = function(v) CONFIG.JumpPower.Power = v end })
 
-    local tabs = {}
-    local function CreateTab(name)
-        local tabButton = Instance.new("TextButton"); tabButton.Name = name; tabButton.Parent = TabsContainer; tabButton.BackgroundColor3 = Color3.fromRGB(40, 35, 50); tabButton.Size = UDim2.new(1/3, -5, 1, 0); tabButton.Position = UDim2.new((#tabs) * (1/3), 5, 0, 0); tabButton.Text = name; tabButton.TextColor3 = Color3.fromRGB(180, 160, 220); tabButton.Font = Enum.Font.SourceSansBold
-        local contentFrame = Instance.new("ScrollingFrame"); contentFrame.Name = name .. "Content"; contentFrame.Parent = ContentContainer; contentFrame.BackgroundColor3 = Color3.fromRGB(20, 18, 25); contentFrame.BorderSizePixel = 0; contentFrame.Size = UDim2.new(1, 0, 1, 0); contentFrame.Visible = #tabs == 0;
+-- [ Visuals Tab ] --
+local VisualsTab = Window:CreateTab("Visuals")
+VisualsTab:CreateToggle({ Name = "Enable ESP", CurrentValue = CONFIG.ESP.Enabled, Flag = "ESPToggle", Callback = function(v) CONFIG.ESP.Enabled = v end })
+VisualsTab:CreateToggle({ Name = "Player ESP", CurrentValue = CONFIG.ESP.Players.Enabled, Flag = "PlayerESPToggle", Callback = function(v) CONFIG.ESP.Players.Enabled = v end })
+VisualsTab:CreateToggle({ Name = "Ball ESP", CurrentValue = CONFIG.ESP.Ball.Enabled, Flag = "BallESPToggle", Callback = function(v) CONFIG.ESP.Ball.Enabled = v end })
 
-        tabButton.MouseButton1Click:Connect(function()
-            for _, t in pairs(tabs) do t.content.Visible = false; t.button.BackgroundColor3 = Color3.fromRGB(40, 35, 50) end
-            contentFrame.Visible = true; tabButton.BackgroundColor3 = Color3.fromRGB(60, 50, 80)
-        end)
-        table.insert(tabs, {button = tabButton, content = contentFrame})
-        return contentFrame
-    end
-
-    local CombatTab, MovementTab, VisualsTab = CreateTab("Combat"), CreateTab("Movement"), CreateTab("Visuals")
-
-    -- [ Element Creation ] --
-    local function CreateToggle(parent, name, configTable, configKey)
-        local frame = Instance.new("Frame"); frame.Parent = parent; frame.Size = UDim2.new(1, -20, 0, 30); frame.Position = UDim2.new(0.5, 0, 0, #parent:GetChildren() * 35 + 10); frame.AnchorPoint = Vector2.new(0.5, 0); frame.BackgroundColor3 = Color3.fromRGB(30, 25, 40)
-        local label = Instance.new("TextLabel"); label.Parent = frame; label.Size = UDim2.new(0.7, 0, 1, 0); label.Text = name; label.TextColor3 = Color3.fromRGB(180, 160, 220); label.Font = Enum.Font.SourceSans; label.TextXAlignment = Enum.TextXAlignment.Left
-        local switch = Instance.new("TextButton"); switch.Parent = frame; switch.Size = UDim2.new(0.3, 0, 1, 0); switch.Position = UDim2.new(0.7, 0, 0, 0); switch.Text = configTable[configKey] and "ON" or "OFF"; switch.BackgroundColor3 = configTable[configKey] and Color3.fromRGB(100, 80, 150) or Color3.fromRGB(50, 45, 60); switch.TextColor3 = Color3.fromRGB(255, 255, 255)
-        switch.MouseButton1Click:Connect(function()
-            configTable[configKey] = not configTable[configKey]
-            switch.Text = configTable[configKey] and "ON" or "OFF"
-            TweenService:Create(switch, TweenInfo.new(0.2), {BackgroundColor3 = configTable[configKey] and Color3.fromRGB(100, 80, 150) or Color3.fromRGB(50, 45, 60)}):Play()
-        end)
-    end
-
-    -- Populate Tabs
-    CreateToggle(CombatTab, "Auto Parry", _G, "Enabled")
-    CreateToggle(VisualsTab, "ESP", CONFIG.ESP, "Enabled")
-    CreateToggle(MovementTab, "WalkSpeed", CONFIG.WalkSpeed, "Enabled")
-    CreateToggle(MovementTab, "JumpPower", CONFIG.JumpPower, "Enabled")
-
-    -- [ Animations & Toggle ] --
-    MainFrame.Size = UDim2.new(0, 0, 0, 0) -- Start invisible
-    TweenService:Create(MainFrame, TweenInfo.new(0.5, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {Size = UDim2.new(0, 450, 0, 350)}):Play()
-
-    UserInputService.InputBegan:Connect(function(input, gp)
-        if not gp and input.KeyCode == CONFIG.ToggleMenuKey then
-            local targetSize = MainFrame.Visible and UDim2.new(0, 0, 0, 0) or UDim2.new(0, 450, 0, 350)
-            local tween = TweenService:Create(MainFrame, TweenInfo.new(0.3, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {Size = targetSize})
-            if MainFrame.Visible then
-                tween.Completed:Connect(function() MainFrame.Visible = false end)
-            else
-                MainFrame.Visible = true
-            end
-            tween:Play()
-        end
-    end)
-end
-GUI:Create()
+-- [ Info Tab ] --
+local InfoTab = Window:CreateTab("Info")
+local InfoLabel = InfoTab:CreateLabel("Fetching data...")
+RunService.Heartbeat:Connect(function()
+    local ping = GetPing() * 1000
+    local fps = 1 / (tick() - lastFrameTime)
+    InfoLabel:Set(string.format("Ping: %d ms\nFPS: %d\nServer Region: %s", math.floor(ping), math.floor(fps), HttpService:GetServerRegion()))
+end)
