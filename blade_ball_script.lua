@@ -382,9 +382,9 @@ local function StartMainLogic(character)
             end
         end
     end
-end)
+    end)
+end
 
---================================================================================================--
 --================================================================================================--
 --[[                                     [ INITIALIZATION ]                                       ]]
 --================================================================================================--
@@ -402,136 +402,139 @@ Player.CharacterAdded:Connect(function(character)
 end)
 
 --================================================================================================--
---[[                                        [ PREMIUM UI ]                                        ]]
+--[[                                      [ CUSTOM PREMIUM UI ]                                     ]]
 --================================================================================================--
-local Rayfield = loadstring(game:HttpGet('https://raw.githubusercontent.com/UI-Interface/CustomFIeld/main/RayField.lua'))()
+local GUI = {}
 
-local Window = Rayfield:CreateWindow({
-    Name = "IMBA SCRIPT v2.0",
-    LoadingTitle = "Loading Your Imba Script...",
-    LoadingSubtitle = "by Jules",
-    ConfigurationSaving = {
-        Enabled = true,
-        FileName = "ImbaScriptConfig"
-    },
-    KeybindSystem = {
-        Enabled = true,
-        KeybindSettings = {
-            -- hide the menu when you press the keybind
-            ToggleKeybind = CONFIG.ToggleMenuKey,
-            -- when you press the keybind, it will be executed
-            HoldKeybinds = false,
-        }
-    }
-})
+function GUI:Create()
+    -- Main Container
+    local ScreenGui = Instance.new("ScreenGui")
+    ScreenGui.Name = "ImbaScriptGUI"
+    ScreenGui.Parent = Player:WaitForChild("PlayerGui")
+    ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 
--- Combat Tab
-local CombatTab = Window:CreateTab("Combat")
+    local MainFrame = Instance.new("Frame")
+    MainFrame.Name = "MainFrame"
+    MainFrame.Parent = ScreenGui
+    MainFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+    MainFrame.BorderColor3 = Color3.fromRGB(80, 80, 80)
+    MainFrame.BorderSizePixel = 2
+    MainFrame.Position = UDim2.new(0.5, -200, 0.5, -150)
+    MainFrame.Size = UDim2.new(0, 400, 0, 300)
+    MainFrame.Draggable = true
+    MainFrame.Visible = true
 
-CombatTab:CreateToggle({
-    Name = "Auto Parry",
-    CurrentValue = Enabled,
-    Flag = "AutoParryToggle",
-    Callback = function(Value)
-        Enabled = Value
-    end,
-})
+    -- Title
+    local Title = Instance.new("TextLabel")
+    Title.Name = "Title"
+    Title.Parent = MainFrame
+    Title.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+    Title.Size = UDim2.new(1, 0, 0, 30)
+    Title.Font = Enum.Font.SourceSansBold
+    Title.Text = "IMBA SCRIPT v3.0"
+    Title.TextColor3 = Color3.fromRGB(255, 255, 255)
+    Title.TextSize = 18
 
-CombatTab:CreateToggle({
-    Name = "Auto Click",
-    CurrentValue = AutoSpamClick,
-    Flag = "AutoClickToggle",
-    Callback = function(Value)
-        AutoSpamClick = Value -- Note: this requires holding the key as well
-    end,
-})
+    -- Tabs Container
+    local TabsContainer = Instance.new("Frame")
+    TabsContainer.Name = "TabsContainer"
+    TabsContainer.Parent = MainFrame
+    TabsContainer.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+    TabsContainer.Position = UDim2.new(0, 0, 0, 30)
+    TabsContainer.Size = UDim2.new(1, 0, 0, 30)
 
-CombatTab:CreateToggle({
-    Name = "Auto 'X' Spam",
-    CurrentValue = AutoSpamX,
-    Flag = "AutoXSpamToggle",
-    Callback = function(Value)
-        AutoSpamX = Value -- Note: this requires holding the key as well
-    end,
-})
+    -- Content Container
+    local ContentContainer = Instance.new("Frame")
+    ContentContainer.Name = "ContentContainer"
+    ContentContainer.Parent = MainFrame
+    ContentContainer.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+    ContentContainer.Position = UDim2.new(0, 0, 0, 60)
+    ContentContainer.Size = UDim2.new(1, 0, 1, -60)
 
--- Movement Tab
-local MovementTab = Window:CreateTab("Movement")
+    -- Tab Creation Logic
+    local tabs = {}
+    local function CreateTab(name)
+        local tabButton = Instance.new("TextButton")
+        tabButton.Name = name
+        tabButton.Parent = TabsContainer
+        tabButton.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+        tabButton.Size = UDim2.new(1 / 3, 0, 1, 0)
+        tabButton.Position = UDim2.new((#tabs) * (1/3), 0, 0, 0)
+        tabButton.Font = Enum.Font.SourceSans
+        tabButton.Text = name
+        tabButton.TextColor3 = Color3.fromRGB(200, 200, 200)
+        tabButton.TextSize = 16
 
-MovementTab:CreateToggle({
-    Name = "Enable WalkSpeed",
-    CurrentValue = CONFIG.WalkSpeed.Enabled,
-    Flag = "WalkSpeedToggle",
-    Callback = function(Value)
-        CONFIG.WalkSpeed.Enabled = Value
-        if not Value then
-            Player.Character.Humanoid.WalkSpeed = 16 -- Reset to default
+        local contentFrame = Instance.new("Frame")
+        contentFrame.Name = name .. "Content"
+        contentFrame.Parent = ContentContainer
+        contentFrame.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+        contentFrame.Size = UDim2.new(1, 0, 1, 0)
+        contentFrame.Visible = #tabs == 0
+
+        tabButton.MouseButton1Click:Connect(function()
+            for _, t in pairs(tabs) do
+                t.content.Visible = false
+                t.button.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+            end
+            contentFrame.Visible = true
+            tabButton.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+        end)
+
+        table.insert(tabs, {button = tabButton, content = contentFrame})
+        return contentFrame
+    end
+
+    local CombatTab = CreateTab("Combat")
+    local MovementTab = CreateTab("Movement")
+    local VisualsTab = CreateTab("Visuals")
+
+    -- Toggle UI visibility
+    UserInputService.InputBegan:Connect(function(input, gameProcessedEvent)
+        if not gameProcessedEvent and input.KeyCode == CONFIG.ToggleMenuKey then
+            MainFrame.Visible = not MainFrame.Visible
         end
-    end,
-})
+    end)
 
-MovementTab:CreateSlider({
-    Name = "Speed",
-    Range = {16, 100},
-    Increment = 1,
-    Suffix = "studs/s",
-    CurrentValue = CONFIG.WalkSpeed.Speed,
-    Flag = "WalkSpeedSlider",
-    Callback = function(Value)
-        CONFIG.WalkSpeed.Speed = Value
-    end,
-})
+    -- Element Creation
+    local verticalOffset = 15
+    local function CreateToggle(parent, name, configTable, configKey)
+        local toggleFrame = Instance.new("Frame")
+        toggleFrame.Name = name .. "Toggle"
+        toggleFrame.Parent = parent
+        toggleFrame.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+        toggleFrame.Size = UDim2.new(0, 150, 0, 25)
+        toggleFrame.Position = UDim2.new(0.05, 0, 0, verticalOffset)
 
-MovementTab:CreateToggle({
-    Name = "Enable JumpPower",
-    CurrentValue = CONFIG.JumpPower.Enabled,
-    Flag = "JumpPowerToggle",
-    Callback = function(Value)
-        CONFIG.JumpPower.Enabled = Value
-        if not Value then
-            Player.Character.Humanoid.JumpPower = 50 -- Reset to default
-        end
-    end,
-})
+        local label = Instance.new("TextLabel")
+        label.Parent = toggleFrame
+        label.Size = UDim2.new(1, -30, 1, 0)
+        label.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+        label.Font = Enum.Font.SourceSans
+        label.Text = name
+        label.TextColor3 = Color3.fromRGB(220, 220, 220)
 
-MovementTab:CreateSlider({
-    Name = "Power",
-    Range = {50, 200},
-    Increment = 1,
-    Suffix = "power",
-    CurrentValue = CONFIG.JumpPower.Power,
-    Flag = "JumpPowerSlider",
-    Callback = function(Value)
-        CONFIG.JumpPower.Power = Value
-    end,
-})
+        local switch = Instance.new("TextButton")
+        switch.Parent = toggleFrame
+        switch.Size = UDim2.new(0, 25, 1, 0)
+        switch.Position = UDim2.new(1, -25, 0, 0)
+        switch.BackgroundColor3 = configTable[configKey] and Color3.fromRGB(100, 255, 100) or Color3.fromRGB(255, 100, 100)
+        switch.Text = ""
 
--- Visuals Tab
-local VisualsTab = Window:CreateTab("Visuals")
+        switch.MouseButton1Click:Connect(function()
+            configTable[configKey] = not configTable[configKey]
+            game:GetService("TweenService"):Create(switch, TweenInfo.new(0.2), {BackgroundColor3 = configTable[configKey] and Color3.fromRGB(100, 255, 100) or Color3.fromRGB(255, 100, 100)}):Play()
+        end)
 
-VisualsTab:CreateToggle({
-    Name = "Enable ESP",
-    CurrentValue = CONFIG.ESP.Enabled,
-    Flag = "ESPToggle",
-    Callback = function(Value)
-        CONFIG.ESP.Enabled = Value
-    end,
-})
+        verticalOffset = verticalOffset + 35
+    end
 
-VisualsTab:CreateToggle({
-    Name = "Player ESP",
-    CurrentValue = CONFIG.ESP.Players.Enabled,
-    Flag = "PlayerESPToggle",
-    Callback = function(Value)
-        CONFIG.ESP.Players.Enabled = Value
-    end,
-})
+    -- Populate Tabs
+    CreateToggle(CombatTab, "Auto Parry", _G, "Enabled")
+    CreateToggle(VisualsTab, "ESP", CONFIG.ESP, "Enabled")
+    CreateToggle(MovementTab, "WalkSpeed", CONFIG.WalkSpeed, "Enabled")
+    CreateToggle(MovementTab, "JumpPower", CONFIG.JumpPower, "Enabled")
 
-VisualsTab:CreateToggle({
-    Name = "Ball ESP",
-    CurrentValue = CONFIG.ESP.Ball.Enabled,
-    Flag = "BallESPToggle",
-    Callback = function(Value)
-        CONFIG.ESP.Ball.Enabled = Value
-    end,
-})
+end
+
+GUI:Create()
