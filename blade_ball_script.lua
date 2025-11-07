@@ -12,15 +12,15 @@ local CONFIG = {
     ToggleMenuKey = Enum.KeyCode.Insert,
     AutoSpamXKey = Enum.KeyCode.X,
     ParryKey = Enum.KeyCode.F,
-    ParryCooldown = 0.1,
-    MinBallClickDelay = 0.4,
-    EmergencyParryDistance = 10,
-    HumanizationFactor = 0.01,
-    -- New Prediction Model Config
+    -- Aggressive Tuning for "Invincible" Performance
+    ParryCooldown = 0.08,          -- Lower cooldown for faster successive parries.
+    MinBallClickDelay = 0.15,      -- Allows re-parrying the same ball much faster.
+    EmergencyParryDistance = 12,   -- Increased safety distance.
+    HumanizationFactor = 0,        -- No artificial delay for machine precision.
     Prediction = {
-        Gravity = Vector3.new(0, -workspace.Gravity, 0),
-        ReactionTime = 0.15,
-        ThreatReactionTime = 0.08,
+        -- Reaction times are now extremely low for maximum performance.
+        ReactionTime = 0.12,       -- Base reaction time.
+        ThreatReactionTime = 0.05, -- Reaction time for high-speed/ability balls.
     }
 }
 
@@ -42,25 +42,30 @@ local lastFrameTime = tick()
 --[[                                        [ INPUT HANDLERS ]                                      ]]
 --================================================================================================--
 -- (This part is correct and will be preserved)
+--================================================================================================--
+--[[                                    [ ADVANCED INPUT HANDLERS ]                                 ]]
+--================================================================================================--
+local SpamConnection = nil
 UserInputService.InputBegan:Connect(function(input, gameProcessedEvent)
     if gameProcessedEvent then return end
-    if input.KeyCode == CONFIG.AutoSpamXKey then
-        AutoSpamX = true
-        coroutine.wrap(function()
-            while AutoSpamX do
-                VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.X, false, game)
-                task.wait()
-                VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.X, false, game)
-            end
-        end)()
+    if input.KeyCode == CONFIG.AutoSpamXKey and not SpamConnection then
+        SpamConnection = RunService.Heartbeat:Connect(function()
+            VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.X, false, game)
+            VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.X, false, game)
+        end)
     end
     if input.KeyCode == CONFIG.ToggleEnabledKey then
         Enabled = not Enabled
-        -- (Notification logic will be re-added with the UI)
+        print("Auto Parry Toggled: " .. (Enabled and "ON" or "OFF"))
     end
 end)
 UserInputService.InputEnded:Connect(function(input)
-    if input.KeyCode == CONFIG.AutoSpamXKey then AutoSpamX = false end
+    if input.KeyCode == CONFIG.AutoSpamXKey then
+        if SpamConnection then
+            SpamConnection:Disconnect()
+            SpamConnection = nil
+        end
+    end
 end)
 
 --================================================================================================--
@@ -88,119 +93,143 @@ local function GetBalls()
 end
 
 --================================================================================================--
---[[                                    [ PERFECT ANALOG CORE ]                                     ]]
--- This is the new prediction engine, based on proven ballistic trajectory equations.
--- Every line is documented to explain exactly how it works.
+--[[                                      [ INVINCIBLE CORE ]                                       ]]
+-- This is the new "Invincible" prediction engine. It's more aggressive and adaptive.
+-- It tracks acceleration to detect ability usage and uses a threat assessment system.
 --================================================================================================--
-local PerfectAnalogCore = {}
-PerfectAnalogCore.__index = PerfectAnalogCore
+local InvincibleCore = {}
+InvincibleCore.__index = InvincibleCore
 
---- Creates a new Core object for a ball.
-function PerfectAnalogCore.new(ball)
-    local self = setmetatable({}, PerfectAnalogCore)
+function InvincibleCore.new(ball)
+    local self = setmetatable({}, InvincibleCore)
     self.Ball = ball
-    self.State = "Tracking" -- States: Tracking, Parried
+    self.State = "Tracking"
     self.LastParryTime = 0
+    self.History = {} -- Stores past velocity and position data
     return self
 end
 
---- The main update function, called every frame.
-function PerfectAnalogCore:Update(character, ping)
+function InvincibleCore:Update(character, ping, fps)
     local now = tick()
-    -- Reset state after cooldown to allow re-parrying the same ball later.
-    if self.State == "Parried" and now - self.LastParryTime > CONFIG.MinBallClickDelay then self.State = "Tracking" end
-    -- If the ball is in a cooldown state, do not perform any calculations.
+    if self.State == "Parried" and now - self.LastParryTime > CONFIG.MinBallClickDelay then
+        self.State = "Tracking"
+    end
     if self.State == "Parried" then self.Analysis = nil; return end
 
     local hrp = character:FindFirstChild("HumanoidRootPart")
     if not hrp then self.Analysis = nil; return end
 
-    -- Get current ball physics properties.
     local ballPos = self.Ball.Position
     local ballVel = self.Ball.Velocity
 
-    -- Compensate for network latency (ping).
-    -- We estimate the "real" position of the ball by moving it forward in time by the ping amount.
-    local realPos = ballPos + (ballVel * ping)
+    -- Store history for acceleration calculation
+    table.insert(self.History, {Time = now, Velocity = ballVel})
+    if #self.History > 5 then table.remove(self.History, 1) end
 
-    -- Vector from ball to player.
-    local delta = hrp.Position - realPos
-
-    -- Ballistic Trajectory Calculation (from EgoMoose's tutorials)
-    -- This solves for the time it will take for a projectile to hit a target.
-    local a = 0.5 * CONFIG.Prediction.Gravity.Y
-    local b = ballVel.Y
-    local c = -delta.Y
-
-    -- Quadratic formula to find time 't'.
-    local discriminant = (b^2) - (4*a*c)
-    if discriminant < 0 then self.Analysis = nil; return end -- No real solution, trajectory won't hit.
-
-    -- We choose the positive solution for time.
-    local t = (-b - math.sqrt(discriminant)) / (2*a)
-
-    -- If time is negative or invalid, fall back to a simpler linear calculation.
-    if t < 0 or t ~= t then
-        t = delta.Magnitude / (ballVel.Magnitude > 0 and ballVel.Magnitude or 1)
+    local acceleration = 0
+    if #self.History > 1 then
+        local first = self.History[1]
+        local last = self.History[#self.History]
+        local deltaTime = last.Time - first.Time
+        if deltaTime > 0 then
+            acceleration = (last.Velocity.Magnitude - first.Velocity.Magnitude) / deltaTime
+        end
     end
 
-    -- Store the analysis results.
+    -- Ping compensation and future position prediction
+    local predictedPos = ballPos + (ballVel * ping)
+    local timeToImpact = (hrp.Position - predictedPos).Magnitude / (ballVel.Magnitude > 1 and ballVel.Magnitude or 1)
+
+    -- Threat Assessment
+    local speedThreat = math.clamp(ballVel.Magnitude / 200, 0, 1) -- Normalize speed to a 0-1 threat score
+    local accelThreat = math.clamp(acceleration / 150, 0, 1)    -- Normalize acceleration to a 0-1 threat score
+    local proximityThreat = math.clamp(1 - ((hrp.Position - ballPos).Magnitude / 50), 0, 1) -- Normalize distance
+
+    local totalThreat = (speedThreat * 0.5) + (accelThreat * 0.3) + (proximityThreat * 0.2)
+
     self.Analysis = {
-        TimeToImpact = t,
-        IsThreat = ballVel.Magnitude > 130 or (ballVel.Y > 10 and ballVel.Magnitude > 80),
+        TimeToImpact = timeToImpact,
+        ThreatLevel = totalThreat,
+        IsHighSpeed = ballVel.Magnitude > 150 or acceleration > 100,
     }
 end
 
---- The final decision maker.
-function PerfectAnalogCore:ShouldParry()
-    -- Do not parry if no valid analysis exists or if the ball is on cooldown.
+function InvincibleCore:ShouldParry()
     if not self.Analysis or self.State == "Parried" then return false end
 
-    -- Choose a reaction time based on whether the ball is a threat.
-    local reactionTime = (self.Analysis.IsThreat and CONFIG.Prediction.ThreatReactionTime or CONFIG.Prediction.ReactionTime) + GetPing()
+    -- Dynamic Reaction Time based on threat
+    local baseReaction = self.Analysis.IsHighSpeed and CONFIG.Prediction.ThreatReactionTime or CONFIG.Prediction.ReactionTime
+    local dynamicReaction = baseReaction - (self.Analysis.ThreatLevel * 0.05) -- Higher threat = lower reaction time
 
-    -- Parry if the time to impact is within our reaction window, or if it's an emergency.
+    local reactionTime = dynamicReaction + GetPing()
+
     if self.Analysis.TimeToImpact <= reactionTime or (self.Ball.Position - Player.Character.HumanoidRootPart.Position).Magnitude <= CONFIG.EmergencyParryDistance then
         return true
     end
     return false
 end
 
---- Sets the ball's state to "Parried" to start its cooldown.
-function PerfectAnalogCore:SetParried()
+function InvincibleCore:SetParried()
     self.State = "Parried"
     self.LastParryTime = tick()
 end
 
+
 --================================================================================================--
---[[                                          [ MAIN LOGIC ]                                        ]]
+--[[                                          [ MAIN LOGIC V2 ]                                     ]]
 --================================================================================================--
 local HeartbeatConnection = nil
 local function StartMainLogic(character)
     if HeartbeatConnection then HeartbeatConnection:Disconnect() end
+
     HeartbeatConnection = RunService.Heartbeat:Connect(function()
         local now = tick()
         local hrp = character and character:FindFirstChild("HumanoidRootPart")
-        if not (hrp and character:FindFirstChildOfClass("Humanoid")) then return end
-        if not Enabled or now - LastParry < CONFIG.ParryCooldown then return end
+        if not (hrp and character:FindFirstChildOfClass("Humanoid")) or not Enabled then return end
+
+        -- Stricter parry cooldown management
+        if now - LastParry < CONFIG.ParryCooldown then return end
 
         local ping = GetPing()
-        local candidates = {}
+        local fps = 1 / (now - lastFrameTime)
+        lastFrameTime = now
 
+        local candidates = {}
         for _, ball in ipairs(GetBalls()) do
             if ball:GetAttribute("target") == Player.Name then
-                local intel = BallMemory[ball] or PerfectAnalogCore.new(ball)
+                local intel = BallMemory[ball] or InvincibleCore.new(ball)
                 BallMemory[ball] = intel
-                intel:Update(character, ping)
+                intel:Update(character, ping, fps)
                 if intel:ShouldParry() then table.insert(candidates, intel) end
             end
         end
 
-        if #candidates > 0 then
-            table.sort(candidates, function(a, b) return a.Analysis.TimeToImpact < b.Analysis.TimeToImpact end)
-            local topThreat = candidates[1]
-            SmartParry()
-            topThreat:SetParried()
+        if #candidates == 0 then return end
+
+        -- Prioritize by Threat Level, then Time To Impact
+        table.sort(candidates, function(a, b)
+            if a.Analysis.ThreatLevel ~= b.Analysis.ThreatLevel then
+                return a.Analysis.ThreatLevel > b.Analysis.ThreatLevel
+            end
+            return a.Analysis.TimeToImpact < b.Analysis.TimeToImpact
+        end)
+
+        -- Execute parry for the highest threat
+        local topThreat = candidates[1]
+        SmartParry()
+        topThreat:SetParried()
+
+        -- Multi-parry logic: If a second ball is an immediate threat, parry again with a small delay.
+        if #candidates > 1 then
+            local secondThreat = candidates[2]
+            local timeDiff = math.abs(topThreat.Analysis.TimeToImpact - secondThreat.Analysis.TimeToImpact)
+            if timeDiff < 0.15 and secondThreat.Analysis.ThreatLevel > 0.5 then
+                task.wait(0.08) -- Minimal delay to avoid game engine issues
+                if tick() - LastParry > CONFIG.ParryCooldown then
+                    SmartParry()
+                    secondThreat:SetParried()
+                end
+            end
         end
     end)
 end
@@ -211,8 +240,8 @@ end
 local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield.lua'))()
 
 local Window = Rayfield:CreateWindow({
-    Name = "IMBA SCRIPT v8.0 - PERFECT ANALOG",
-    LoadingTitle = "Loading Perfect Analog Core...",
+    Name = "IMBA SCRIPT v9.0 - INVINCIBLE CORE",
+    LoadingTitle = "Loading Invincible Core...",
     LoadingSubtitle = "by Jules",
     ConfigurationSaving = { Enabled = true, FileName = "PerfectAnalogConfig" },
     KeybindSystem = { Enabled = true, KeybindSettings = { ToggleKeybind = CONFIG.ToggleMenuKey, HoldKeybinds = false } }
