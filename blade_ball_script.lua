@@ -419,6 +419,7 @@ local function StartMainLogic(character)
         -- New Parry Logic
         local ping = GetPing() / 1000
         local fps = workspace:GetRealPhysicsFPS()
+        local candidates = {}
 
         for _, ball in ipairs(GetBalls()) do
             if ball:GetAttribute("target") ~= Player.Name then continue end
