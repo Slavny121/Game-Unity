@@ -237,6 +237,122 @@ local function UpdateESP()
     end
 end
 
+--================================================================================================--
+--[[                                    [ BALL PREDICTOR MODULE ]                                   ]]
+--================================================================================================--
+local BallPredictor = {}
+BallPredictor.__index = BallPredictor
+
+--[[
+    Creates a new Ball Predictor object.
+    Each ball in the game will have its own predictor to track its state.
+]]
+function BallPredictor.new(ball)
+    local self = setmetatable({}, BallPredictor)
+    self.Ball = ball
+    self.History = {} -- Stores past positions, velocities, and times
+    return self
+end
+
+--[[
+    Updates the predictor with the latest data for the ball.
+    This function will be called every frame (Heartbeat).
+]]
+function BallPredictor:Update(character, ping, fps)
+    local now = tick()
+    local ball = self.Ball
+    local vel = (ball:FindFirstChild("zoomies") and ball.zoomies.VectorVelocity) or ball.Velocity
+    local pos = ball.Position
+
+    -- Store current state
+    table.insert(self.History, {
+        Time = now,
+        Position = pos,
+        Velocity = vel,
+    })
+
+    -- Keep history buffer at a fixed size
+    if #self.History > CONFIG.SmartParry.HistoryBufferSize then
+        table.remove(self.History, 1)
+    end
+
+    -- Not enough data to analyze, exit early
+    if #self.History < 2 then
+        self.Analysis = nil
+        return
+    end
+
+    -- Analyze the collected data
+    local hrp = character:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+
+    local latest = self.History[#self.History]
+    local previous = self.History[#self.History - 1]
+
+    local deltaTime = latest.Time - previous.Time
+    if deltaTime == 0 then return end
+
+    -- Ping Compensation: Estimate the ball's "real" position
+    local estimatedRealPos = latest.Position + (latest.Velocity * ping)
+    local distance = (hrp.Position - estimatedRealPos).Magnitude
+
+    -- Acceleration Analysis
+    local acceleration = (latest.Velocity.Magnitude - previous.Velocity.Magnitude) / deltaTime
+
+    -- Curve Analysis
+    local dotProduct = latest.Velocity.Unit:Dot(previous.Velocity.Unit)
+    local isCurving = dotProduct < CONFIG.SmartParry.CurveDetectionThreshold
+
+    -- FPS Compensation Factor
+    local fpsFactor = math.clamp(1 - (fps < CONFIG.FPSTarget and (CONFIG.FPSTarget - fps) / 100 or 0), 0.8, 1)
+
+    self.Analysis = {
+        Distance = distance,
+        Speed = latest.Velocity.Magnitude,
+        Acceleration = acceleration,
+        IsCurving = isCurving,
+        Ping = ping,
+        FPSFactor = fpsFactor,
+    }
+end
+
+--[[
+    The core function. Determines if a parry is needed based on the analysis.
+    This function will use the physical model to predict the future.
+]]
+function BallPredictor:ShouldParry()
+    if not self.Analysis then return false end
+
+    local analysis = self.Analysis
+    local speed = analysis.Speed
+    if speed == 0 then return false end
+
+    -- Time To Collision (TTC) - fundamental calculation
+    local timeToCollision = analysis.Distance / speed
+
+    -- Calculate base reaction time
+    local baseReactionTime
+    if analysis.Acceleration > CONFIG.AccelerationThresholds.DeltaSpeed or analysis.IsCurving then
+        baseReactionTime = CONFIG.AcceleratingReactionTime.Normal -- Use the faster reaction times
+    else
+        baseReactionTime = CONFIG.ReactionTime.Normal
+    end
+
+    -- Adjust reaction time based on ping and FPS
+    local reactionTime = (baseReactionTime * analysis.FPSFactor) + analysis.Ping
+
+    -- Make reaction time even faster if the ball is behaving erratically
+    if analysis.Acceleration > CONFIG.AccelerationThresholds.DeltaSpeed or analysis.IsCurving then
+        reactionTime = reactionTime / CONFIG.SmartParry.AdaptiveReactionMultiplier
+    end
+
+    -- The final decision
+    if timeToCollision <= reactionTime or analysis.Distance <= CONFIG.EmergencyParryDistance then
+        return true
+    end
+
+    return false
+end
 
 --================================================================================================--
 --[[                                          [ MAIN LOGIC ]                                        ]]
@@ -276,112 +392,29 @@ local function StartMainLogic(character)
         VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 0)
     end
 
-    --================================================================================================--
-    --[[                                      [ ADVANCED AUTO PARRY ]                                   ]]
-    --================================================================================================--
-    local ping = GetPing() / 1000
-    local fps = math.floor(workspace:GetRealPhysicsFPS())
-    local fpsFactor = math.clamp(1 - (fps < CONFIG.FPSTarget and (CONFIG.FPSTarget - fps) / 100 or 0), 0.8, 1)
+        -- New Parry Logic
+        local ping = GetPing() / 1000
+        local fps = workspace:GetRealPhysicsFPS()
 
-    local candidates = {}
+        for _, ball in ipairs(GetBalls()) do
+            if ball:GetAttribute("target") ~= Player.Name then continue end
 
-    for _, ball in ipairs(GetBalls()) do
-        if ball:GetAttribute("target") ~= Player.Name then continue end
-
-        local pos = ball.Position
-        local vel = (ball:FindFirstChild("zoomies") and ball.zoomies.VectorVelocity) or ball.Velocity
-        local speed = vel.Magnitude
-        local toPlayer = hrp.Position - pos
-        local distance = toPlayer.Magnitude
-
-        -- Initialize memory for new balls
-        local mem = BallMemory[ball] or {
-            history = {},
-            lastDirection = vel.Unit,
-        }
-        BallMemory[ball] = mem
-
-        -- Record history
-        table.insert(mem.history, {position = pos, velocity = vel, time = now})
-        if #mem.history > CONFIG.SmartParry.HistoryBufferSize then
-            table.remove(mem.history, 1)
-        end
-
-        -- Analyze ball behavior from history
-        local avgSpeed = 0
-        local isCurving = false
-        if #mem.history > 1 then
-            for _, data in ipairs(mem.history) do
-                avgSpeed += data.velocity.Magnitude
-            end
-            avgSpeed /= #mem.history
-
-            local dotProduct = vel.Unit:Dot(mem.lastDirection)
-            if dotProduct < CONFIG.SmartParry.CurveDetectionThreshold then
-                isCurving = true
-            end
-        end
-        mem.lastDirection = vel.Unit
-
-        local isAccelerating = speed > avgSpeed * CONFIG.SmartParry.AccelerationDetectionThreshold
-        local upwardSpin = vel.Y > 10
-
-        -- Determine reaction time based on behavior
-        local baseReactTime
-        if isAccelerating or isCurving then
-            baseReactTime = (upwardSpin and CONFIG.AcceleratingReactionTime.UpwardSpin or CONFIG.AcceleratingReactionTime.Normal)
-        else
-            baseReactTime = (upwardSpin and CONFIG.ReactionTime.UpwardSpin or CONFIG.ReactionTime.Normal)
-        end
-
-        local reactTime = baseReactTime * fpsFactor + ping
-        if isAccelerating or isCurving then
-             reactTime /= CONFIG.SmartParry.AdaptiveReactionMultiplier
-        end
-
-        local predictedTime = distance / (speed + 1)
-
-        local last = BallLastParryTime[ball] or 0
-        local ready = now - last >= CONFIG.MinBallClickDelay and now - LastParry >= CONFIG.ParryCooldown
-
-        if ready and (distance <= CONFIG.EmergencyParryDistance or predictedTime <= reactTime) then
-            table.insert(candidates, {
-                ball = ball,
-                priority = predictedTime,
-            })
-        end
-    end
-
-    -- Parry logic (same as before, but now with smarter candidates)
-    if #candidates > 0 then
-        table.sort(candidates, function(a, b)
-            return a.priority < b.priority
-        end)
-
-        for i, data in ipairs(candidates) do
-            if i > CONFIG.MaxParryChain then break end
-
-            local ball = data.ball
-            if BallLastParryTime[ball] and tick() - BallLastParryTime[ball] < CONFIG.MinBallClickDelay then
-                continue
+            local predictor = BallMemory[ball]
+            if not predictor then
+                predictor = BallPredictor.new(ball)
+                BallMemory[ball] = predictor
             end
 
-            if i == 2 then
-                local distBetweenBalls = (candidates[1].ball.Position - candidates[2].ball.Position).Magnitude
-                if distBetweenBalls <= 10 then
-                    task.wait(0.03)
+            predictor:Update(character, ping, fps)
+
+            if predictor:ShouldParry() then
+                 if now - LastParry >= CONFIG.ParryCooldown then
+                    SmartParry()
+                    LastParry = now
+                    break -- Parry one ball at a time
                 end
             end
-
-            if tick() - LastParry >= CONFIG.ParryCooldown and tick() - LastSuccessfulParry >= 0.1 then
-                SmartParry()
-                LastSuccessfulParry = tick()
-                BallLastParryTime[ball] = tick()
-                LastParry = tick()
-                break -- Parry one ball at a time for precision
-            end
         end
-    end
     end)
 end
 
