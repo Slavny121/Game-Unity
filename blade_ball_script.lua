@@ -34,29 +34,29 @@ local CONFIG = {
 
     -- Base reaction time for different ball trajectories. Lower values = parry sooner.
     ReactionTime = {
-        Normal = 0.22,                        -- Default reaction time for normal balls. (LOWERED FOR FASTER REACTION)
-        UpwardSpin = 0.17,                    -- Reaction time for balls with upward spin (which are often faster). (LOWERED)
+        Normal = 0.19,                        -- Aggressively lowered
+        UpwardSpin = 0.15,                    -- Aggressively lowered
     },
     -- Reaction time when the ball is accelerating rapidly (e.g., after a clash).
     -- These values are lower because we need to react faster.
     AcceleratingReactionTime = {
-        Normal = 0.14,                        -- (LOWERED)
-        UpwardSpin = 0.09,                    -- (LOWERED)
+        Normal = 0.12,                        -- Aggressively lowered
+        UpwardSpin = 0.08,                    -- Aggressively lowered
     },
 
     -- This section defines what counts as a "rapidly accelerating" ball.
     AccelerationThresholds = {
-        DeltaSpeed = 25,                      -- Trigger if speed increases by this much in one frame. (LOWERED)
-        AvgSpeedMultiplier = 1.3,             -- Trigger if current speed is this much higher than recent average speed. (LOWERED)
-        TravelDistance = 12,                  -- Trigger if the ball travels this far in a single frame. (LOWERED)
+        DeltaSpeed = 20,                      -- More sensitive
+        AvgSpeedMultiplier = 1.25,            -- More sensitive
+        TravelDistance = 10,                  -- More sensitive
     },
 
     -- NEW: Advanced Parry Logic Settings
     SmartParry = {
-        HistoryBufferSize = 35,               -- How many ticks of data to store for each ball. (INCREASED)
-        AccelerationDetectionThreshold = 1.15, -- Trigger acceleration mode if speed increases by 15% over the average. (LOWERED)
-        CurveDetectionThreshold = 0.97,       -- Dot product threshold to detect a curve. Lower = more sensitive. (LOWERED)
-        AdaptiveReactionMultiplier = 1.3,     -- Multiplier for reaction time based on ball behavior. (INCREASED)
+        HistoryBufferSize = 40,               -- Increased for better analysis
+        AccelerationDetectionThreshold = 1.1, -- More sensitive
+        CurveDetectionThreshold = 50,         -- NEW: Based on Lateral Velocity. Higher = more sensitive to curves.
+        AdaptiveReactionMultiplier = 1.5,     -- React much faster to threats
     },
 
     -- Performance Settings
@@ -112,7 +112,7 @@ local LastParry = 0
 local LastSuccessfulParry = 0
 
 local BallMemory = {}
-local BallLastParryTime = {}
+local BallParryCooldowns = {}
 
 --================================================================================================--
 --[[                                          [ FUNCTIONS ]                                         ]]
@@ -306,6 +306,14 @@ function BallPredictor:Update(character, ping, fps)
     -- FPS Compensation Factor
     local fpsFactor = math.clamp(1 - (fps < CONFIG.FPSTarget and (CONFIG.FPSTarget - fps) / 100 or 0), 0.8, 1)
 
+    -- New: Predict interception point and lateral velocity
+    local timeToImpact = distance / latest.Velocity.Magnitude
+    local predictedBallPos = estimatedRealPos + (latest.Velocity * timeToImpact)
+    local predictedPlayerPos = hrp.Position + (hrp.Velocity * timeToImpact)
+    local interceptionOffset = (predictedBallPos - predictedPlayerPos).Magnitude
+
+    local lateralVelocity = latest.Velocity:Cross(hrp.Position - estimatedRealPos).Magnitude
+
     self.Analysis = {
         Distance = distance,
         Speed = latest.Velocity.Magnitude,
@@ -313,6 +321,8 @@ function BallPredictor:Update(character, ping, fps)
         IsCurving = isCurving,
         Ping = ping,
         FPSFactor = fpsFactor,
+        InterceptionOffset = interceptionOffset,
+        LateralVelocity = lateralVelocity,
     }
 end
 
@@ -323,6 +333,13 @@ end
 function BallPredictor:ShouldParry()
     if not self.Analysis then return false end
 
+    -- Cooldown Checks
+    local now = tick()
+    if now - LastParry < CONFIG.ParryCooldown then return false end
+
+    local ballCooldown = BallParryCooldowns[self.Ball] or 0
+    if now - ballCooldown < CONFIG.MinBallClickDelay then return false end
+
     local analysis = self.Analysis
     local speed = analysis.Speed
     if speed == 0 then return false end
@@ -330,9 +347,16 @@ function BallPredictor:ShouldParry()
     -- Time To Collision (TTC) - fundamental calculation
     local timeToCollision = analysis.Distance / speed
 
+    local isThreat = analysis.Acceleration > CONFIG.AccelerationThresholds.DeltaSpeed or
+                     analysis.LateralVelocity > CONFIG.SmartParry.CurveDetectionThreshold
+
+    if isThreat then
+        print("IMBA SCRIPT: Threat detected! Ball:", self.Ball.Name, "Accel:", analysis.Acceleration, "Curve:", analysis.LateralVelocity)
+    end
+
     -- Calculate base reaction time
     local baseReactionTime
-    if analysis.Acceleration > CONFIG.AccelerationThresholds.DeltaSpeed or analysis.IsCurving then
+    if isThreat then
         baseReactionTime = CONFIG.AcceleratingReactionTime.Normal -- Use the faster reaction times
     else
         baseReactionTime = CONFIG.ReactionTime.Normal
@@ -342,7 +366,7 @@ function BallPredictor:ShouldParry()
     local reactionTime = (baseReactionTime * analysis.FPSFactor) + analysis.Ping
 
     -- Make reaction time even faster if the ball is behaving erratically
-    if analysis.Acceleration > CONFIG.AccelerationThresholds.DeltaSpeed or analysis.IsCurving then
+    if isThreat then
         reactionTime = reactionTime / CONFIG.SmartParry.AdaptiveReactionMultiplier
     end
 
@@ -408,12 +432,28 @@ local function StartMainLogic(character)
             predictor:Update(character, ping, fps)
 
             if predictor:ShouldParry() then
-                 if now - LastParry >= CONFIG.ParryCooldown then
-                    SmartParry()
-                    LastParry = now
-                    break -- Parry one ball at a time
-                end
+                table.insert(candidates, predictor)
             end
+        end
+
+        if #candidates > 0 then
+            -- Sort candidates by threat level (higher threat first)
+            table.sort(candidates, function(a, b)
+                local analysisA = a.Analysis
+                local analysisB = b.Analysis
+                -- Threat score: higher speed and lateral velocity are more dangerous. Closer is more dangerous.
+                local threatA = (analysisA.Speed * 1.5) + (analysisA.LateralVelocity * 0.5) - (analysisA.Distance * 0.8)
+                local threatB = (analysisB.Speed * 1.5) + (analysisB.LateralVelocity * 0.5) - (analysisB.Distance * 0.8)
+                return threatA > threatB
+            end)
+
+            -- Parry the most threatening ball
+            local topThreat = candidates[1]
+            print("IMBA SCRIPT: Multiple threats detected. Prioritizing:", topThreat.Ball.Name)
+            SmartParry()
+            local parryTime = tick()
+            LastParry = parryTime
+            BallParryCooldowns[topThreat.Ball] = parryTime
         end
     end)
 end
