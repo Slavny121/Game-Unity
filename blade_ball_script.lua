@@ -18,7 +18,8 @@
 --================================================================================================--
 local CONFIG = {
     -- Keybinds
-    ToggleEnabledKey = Enum.KeyCode.F4,      -- Press to toggle the entire script on/off
+    ToggleEnabledKey = Enum.KeyCode.F4,      -- Press to toggle the auto parry ON/OFF
+    ToggleMenuKey = Enum.KeyCode.Insert,     -- Press to show/hide the menu
     AutoClickKey = Enum.KeyCode.V,            -- Hold to spam mouse clicks
     AutoSpamXKey = Enum.KeyCode.X,            -- Hold to spam the 'X' key for abilities
 
@@ -33,29 +34,29 @@ local CONFIG = {
 
     -- Base reaction time for different ball trajectories. Lower values = parry sooner.
     ReactionTime = {
-        Normal = 0.26,                        -- Default reaction time for normal balls.
-        UpwardSpin = 0.20,                    -- Reaction time for balls with upward spin (which are often faster).
+        Normal = 0.22,                        -- Default reaction time for normal balls. (LOWERED FOR FASTER REACTION)
+        UpwardSpin = 0.17,                    -- Reaction time for balls with upward spin (which are often faster). (LOWERED)
     },
     -- Reaction time when the ball is accelerating rapidly (e.g., after a clash).
     -- These values are lower because we need to react faster.
     AcceleratingReactionTime = {
-        Normal = 0.17,
-        UpwardSpin = 0.12,
+        Normal = 0.14,                        -- (LOWERED)
+        UpwardSpin = 0.09,                    -- (LOWERED)
     },
 
     -- This section defines what counts as a "rapidly accelerating" ball.
     AccelerationThresholds = {
-        DeltaSpeed = 30,                      -- Trigger if speed increases by this much in one frame.
-        AvgSpeedMultiplier = 1.35,            -- Trigger if current speed is this much higher than recent average speed.
-        TravelDistance = 14,                  -- Trigger if the ball travels this far in a single frame.
+        DeltaSpeed = 25,                      -- Trigger if speed increases by this much in one frame. (LOWERED)
+        AvgSpeedMultiplier = 1.3,             -- Trigger if current speed is this much higher than recent average speed. (LOWERED)
+        TravelDistance = 12,                  -- Trigger if the ball travels this far in a single frame. (LOWERED)
     },
 
     -- NEW: Advanced Parry Logic Settings
     SmartParry = {
-        HistoryBufferSize = 30,               -- How many ticks of data to store for each ball.
-        AccelerationDetectionThreshold = 1.2, -- Trigger acceleration mode if speed increases by 20% over the average.
-        CurveDetectionThreshold = 0.98,       -- Dot product threshold to detect a curve. Lower = more sensitive.
-        AdaptiveReactionMultiplier = 1.1,     -- Multiplier for reaction time based on ball behavior.
+        HistoryBufferSize = 35,               -- How many ticks of data to store for each ball. (INCREASED)
+        AccelerationDetectionThreshold = 1.15, -- Trigger acceleration mode if speed increases by 15% over the average. (LOWERED)
+        CurveDetectionThreshold = 0.97,       -- Dot product threshold to detect a curve. Lower = more sensitive. (LOWERED)
+        AdaptiveReactionMultiplier = 1.3,     -- Multiplier for reaction time based on ball behavior. (INCREASED)
     },
 
     -- Performance Settings
@@ -169,6 +170,20 @@ UserInputService.InputBegan:Connect(function(input, gameProcessedEvent)
     end
     if input.KeyCode == CONFIG.ToggleEnabledKey then
         Enabled = not Enabled
+        print("Auto Parry: " .. (Enabled and "ON" or "OFF"))
+        -- Optional: Add a simple on-screen notification as well, as console might not always be visible.
+        local notifGui = Instance.new("ScreenGui", Player.PlayerGui)
+        notifGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+        local label = Instance.new("TextLabel", notifGui)
+        label.Size = UDim2.new(0.2, 0, 0.1, 0)
+        label.Position = UDim2.new(0.4, 0, 0, 0)
+        label.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+        label.TextColor3 = Color3.fromRGB(255, 255, 255)
+        label.Font = Enum.Font.SourceSansBold
+        label.TextSize = 24
+        label.Text = "Auto Parry: " .. (Enabled and "ON" or "OFF")
+        game:GetService("TweenService"):Create(label, TweenInfo.new(2), {TextTransparency = 1, BackgroundTransparency = 1}):Play()
+        game:GetService("Debris"):AddItem(notifGui, 2.1)
     end
 end)
 
@@ -224,15 +239,22 @@ end
 
 
 --================================================================================================--
---[[                                          [ MAIN LOOP ]                                         ]]
+--[[                                          [ MAIN LOGIC ]                                        ]]
 --================================================================================================--
 
-RunService.Heartbeat:Connect(function()
-    local char = Player.Character
-    local hrp = char and char:FindFirstChild("HumanoidRootPart")
-    local humanoid = char and char:FindFirstChildOfClass("Humanoid")
+local HeartbeatConnection = nil
 
-    if not (hrp and Enabled and humanoid) then return end
+local function StartMainLogic(character)
+    if HeartbeatConnection then
+        HeartbeatConnection:Disconnect()
+        HeartbeatConnection = nil
+    end
+
+    HeartbeatConnection = RunService.Heartbeat:Connect(function()
+        local hrp = character and character:FindFirstChild("HumanoidRootPart")
+        local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+
+        if not (hrp and Enabled and humanoid) then return end
 
     -- Update ESP
     UpdateESP()
@@ -363,70 +385,153 @@ RunService.Heartbeat:Connect(function()
 end)
 
 --================================================================================================--
---[[                                         [ SIMPLE UI ]                                        ]]
 --================================================================================================--
-local function CreateUI()
-    local ScreenGui = Instance.new("ScreenGui")
-    local MainFrame = Instance.new("Frame")
-    local TitleLabel = Instance.new("TextLabel")
-    local ToggleButton = Instance.new("TextButton")
+--[[                                     [ INITIALIZATION ]                                       ]]
+--================================================================================================--
 
-    ScreenGui.Parent = Player:WaitForChild("PlayerGui")
-    ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-
-    MainFrame.Name = "MainFrame"
-    MainFrame.Parent = ScreenGui
-    MainFrame.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
-    MainFrame.BorderColor3 = Color3.fromRGB(100, 100, 100)
-    MainFrame.BorderSizePixel = 2
-    MainFrame.Position = UDim2.new(0.5, -150, 0.5, -200)
-    MainFrame.Size = UDim2.new(0, 300, 0, 400)
-    MainFrame.Draggable = true
-    MainFrame.Active = true
-
-    TitleLabel.Name = "TitleLabel"
-    TitleLabel.Parent = MainFrame
-    TitleLabel.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
-    TitleLabel.Size = UDim2.new(1, 0, 0, 30)
-    TitleLabel.Font = Enum.Font.SourceSansBold
-    TitleLabel.Text = "IMBA SCRIPT v1.0"
-    TitleLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
-    TitleLabel.TextSize = 18
-
-    ToggleButton.Name = "ToggleButton"
-    ToggleButton.Parent = MainFrame
-    ToggleButton.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
-    ToggleButton.Position = UDim2.new(0.05, 0, 0.1, 0)
-    ToggleButton.Size = UDim2.new(0.9, 0, 0, 30)
-    ToggleButton.Font = Enum.Font.SourceSans
-    ToggleButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-    ToggleButton.TextSize = 16
-    ToggleButton.Text = "Toggle Script: ON"
-
-    ToggleButton.MouseButton1Click:Connect(function()
-        Enabled = not Enabled
-        ToggleButton.Text = "Toggle Script: " .. (Enabled and "ON" or "OFF")
-    end)
-
-    -- Function to create a simple toggle button
-    local function CreateToggleButton(name, yPos, configTable, configKey)
-        local button = ToggleButton:Clone()
-        button.Name = name
-        button.Parent = MainFrame
-        button.Position = UDim2.new(0.05, 0, yPos, 0)
-        button.Text = name .. ": " .. (configTable[configKey] and "ON" or "OFF")
-
-        button.MouseButton1Click:Connect(function()
-            configTable[configKey] = not configTable[configKey]
-            button.Text = name .. ": " .. (configTable[configKey] and "ON" or "OFF")
-        end)
-        return button
-    end
-
-    -- Create buttons for each feature
-    CreateToggleButton("ESP", 0.2, CONFIG.ESP, "Enabled")
-    CreateToggleButton("WalkSpeed", 0.3, CONFIG.WalkSpeed, "Enabled")
-    CreateToggleButton("JumpPower", 0.4, CONFIG.JumpPower, "Enabled")
+-- Start the script for the first time
+if Player.Character then
+    StartMainLogic(Player.Character)
 end
 
-CreateUI()
+-- Restart the script every time the player respawns
+Player.CharacterAdded:Connect(function(character)
+    -- Wait for the humanoid to be created
+    character:WaitForChild("Humanoid")
+    StartMainLogic(character)
+end)
+
+--================================================================================================--
+--[[                                        [ PREMIUM UI ]                                        ]]
+--================================================================================================--
+local Rayfield = loadstring(game:HttpGet('https://raw.githubusercontent.com/UI-Interface/CustomFIeld/main/RayField.lua'))()
+
+local Window = Rayfield:CreateWindow({
+    Name = "IMBA SCRIPT v2.0",
+    LoadingTitle = "Loading Your Imba Script...",
+    LoadingSubtitle = "by Jules",
+    ConfigurationSaving = {
+        Enabled = true,
+        FileName = "ImbaScriptConfig"
+    },
+    KeybindSystem = {
+        Enabled = true,
+        KeybindSettings = {
+            -- hide the menu when you press the keybind
+            ToggleKeybind = CONFIG.ToggleMenuKey,
+            -- when you press the keybind, it will be executed
+            HoldKeybinds = false,
+        }
+    }
+})
+
+-- Combat Tab
+local CombatTab = Window:CreateTab("Combat")
+
+CombatTab:CreateToggle({
+    Name = "Auto Parry",
+    CurrentValue = Enabled,
+    Flag = "AutoParryToggle",
+    Callback = function(Value)
+        Enabled = Value
+    end,
+})
+
+CombatTab:CreateToggle({
+    Name = "Auto Click",
+    CurrentValue = AutoSpamClick,
+    Flag = "AutoClickToggle",
+    Callback = function(Value)
+        AutoSpamClick = Value -- Note: this requires holding the key as well
+    end,
+})
+
+CombatTab:CreateToggle({
+    Name = "Auto 'X' Spam",
+    CurrentValue = AutoSpamX,
+    Flag = "AutoXSpamToggle",
+    Callback = function(Value)
+        AutoSpamX = Value -- Note: this requires holding the key as well
+    end,
+})
+
+-- Movement Tab
+local MovementTab = Window:CreateTab("Movement")
+
+MovementTab:CreateToggle({
+    Name = "Enable WalkSpeed",
+    CurrentValue = CONFIG.WalkSpeed.Enabled,
+    Flag = "WalkSpeedToggle",
+    Callback = function(Value)
+        CONFIG.WalkSpeed.Enabled = Value
+        if not Value then
+            Player.Character.Humanoid.WalkSpeed = 16 -- Reset to default
+        end
+    end,
+})
+
+MovementTab:CreateSlider({
+    Name = "Speed",
+    Range = {16, 100},
+    Increment = 1,
+    Suffix = "studs/s",
+    CurrentValue = CONFIG.WalkSpeed.Speed,
+    Flag = "WalkSpeedSlider",
+    Callback = function(Value)
+        CONFIG.WalkSpeed.Speed = Value
+    end,
+})
+
+MovementTab:CreateToggle({
+    Name = "Enable JumpPower",
+    CurrentValue = CONFIG.JumpPower.Enabled,
+    Flag = "JumpPowerToggle",
+    Callback = function(Value)
+        CONFIG.JumpPower.Enabled = Value
+        if not Value then
+            Player.Character.Humanoid.JumpPower = 50 -- Reset to default
+        end
+    end,
+})
+
+MovementTab:CreateSlider({
+    Name = "Power",
+    Range = {50, 200},
+    Increment = 1,
+    Suffix = "power",
+    CurrentValue = CONFIG.JumpPower.Power,
+    Flag = "JumpPowerSlider",
+    Callback = function(Value)
+        CONFIG.JumpPower.Power = Value
+    end,
+})
+
+-- Visuals Tab
+local VisualsTab = Window:CreateTab("Visuals")
+
+VisualsTab:CreateToggle({
+    Name = "Enable ESP",
+    CurrentValue = CONFIG.ESP.Enabled,
+    Flag = "ESPToggle",
+    Callback = function(Value)
+        CONFIG.ESP.Enabled = Value
+    end,
+})
+
+VisualsTab:CreateToggle({
+    Name = "Player ESP",
+    CurrentValue = CONFIG.ESP.Players.Enabled,
+    Flag = "PlayerESPToggle",
+    Callback = function(Value)
+        CONFIG.ESP.Players.Enabled = Value
+    end,
+})
+
+VisualsTab:CreateToggle({
+    Name = "Ball ESP",
+    CurrentValue = CONFIG.ESP.Ball.Enabled,
+    Flag = "BallESPToggle",
+    Callback = function(Value)
+        CONFIG.ESP.Ball.Enabled = Value
+    end,
+})
